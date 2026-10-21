@@ -1,0 +1,6 @@
+{
+  "name": "Adsearn",
+  "description": "Unity Ads Production Suite & Live Telemetry with Rewarded and Interstitial ads, DataStore persistence, and real-time network intelligence.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

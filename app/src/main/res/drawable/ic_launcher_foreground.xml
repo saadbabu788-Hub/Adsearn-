@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Center 66dp safe zone (21,21 to 87,87) -->
+    <!-- Gold Coin Outer Rim -->
+    <path
+        android:fillColor="#FFD700"
+        android:pathData="M54,26 C38.54,26 26,38.54 26,54 C26,69.46 38.54,82 54,82 C69.46,82 82,69.46 82,54 C82,38.54 69.46,26 54,26 Z" />
+    <!-- Inner Dark Disc -->
+    <path
+        android:fillColor="#1B1238"
+        android:pathData="M54,30 C40.75,30 30,40.75 30,54 C30,67.25 40.75,78 54,78 C67.25,78 78,67.25 78,54 C78,40.75 67.25,30 54,30 Z" />
+    <!-- Play Triangle in Gold -->
+    <path
+        android:fillColor="#FFCA28"
+        android:pathData="M48,42 L66,54 L48,66 Z" />
+    <!-- Star accent -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M67,36 L68.5,40 L72.5,41.5 L68.5,43 L67,47 L65.5,43 L61.5,41.5 L65.5,40 Z" />
+</vector>
