@@ -141,8 +141,8 @@ fun AdPerformanceCard(
                         modifier = Modifier.weight(1f)
                     )
                     MetricTile(
-                        title = "Coins Earned",
-                        value = adStats.totalCoinsEarned,
+                        title = "Coins / Cash",
+                        displayString = "${adStats.totalCoinsEarned} (₹${adStats.totalRupeesEarned.toInt()})",
                         icon = Icons.Default.MonetizationOn,
                         iconTint = GoldCoin,
                         gradientColors = listOf(Color(0x35FFD700), Color(0x150E0926)),

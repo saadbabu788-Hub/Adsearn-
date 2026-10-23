@@ -53,6 +53,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _showCoinBurst = MutableStateFlow(false)
     val showCoinBurst: StateFlow<Boolean> = _showCoinBurst.asStateFlow()
 
+    private val _showWithdrawalSheet = MutableStateFlow(false)
+    val showWithdrawalSheet: StateFlow<Boolean> = _showWithdrawalSheet.asStateFlow()
+
     private val _snackbarMessages = MutableSharedFlow<UiMessage>(extraBufferCapacity = 10)
     val snackbarMessages: SharedFlow<UiMessage> = _snackbarMessages.asSharedFlow()
 
@@ -100,6 +103,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.resetStats()
             _snackbarMessages.emit(UiMessage.Info("All ad counters reset to 0."))
+        }
+    }
+
+    fun openWithdrawalSheet() {
+        _showWithdrawalSheet.value = true
+    }
+
+    fun closeWithdrawalSheet() {
+        _showWithdrawalSheet.value = false
+    }
+
+    fun submitWithdrawal(
+        amount: Double,
+        upiId: String,
+        email: String?,
+        onComplete: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val result = repository.submitWithdrawal(amount, upiId, email)
+            result.fold(
+                onSuccess = { req ->
+                    val msg = "Your withdrawal request for ₹${req.amountInr.toInt()} has been submitted successfully and is pending review."
+                    _snackbarMessages.emit(UiMessage.Success(msg))
+                    onComplete(true, msg)
+                },
+                onFailure = { err ->
+                    val errorMsg = err.message ?: "Failed to submit withdrawal request."
+                    _snackbarMessages.emit(UiMessage.Error(errorMsg))
+                    onComplete(false, errorMsg)
+                }
+            )
         }
     }
 

@@ -5,6 +5,7 @@ import android.content.Context
 import android.util.Log
 import com.example.INTERSTITIAL_PLACEMENT_ID
 import com.example.REWARD_COINS_PER_AD
+import com.example.REWARD_INR_PER_AD
 import com.example.REWARDED_PLACEMENT_ID
 import com.example.TEST_MODE
 import com.example.UNITY_GAME_ID
@@ -312,9 +313,12 @@ class UnityAdsManager(
                         loadRewardedAd()
                     }
 
+                    private var rewardHandled = false
+
                     override fun onUnityAdsShowStart(placementId: String?) {
                         Log.d(TAG, "Rewarded Ad Started: $placementId")
                         _lastRawError.value = null
+                        rewardHandled = false
                     }
 
                     override fun onUnityAdsShowClick(placementId: String?) {
@@ -329,20 +333,23 @@ class UnityAdsManager(
                         Log.d(TAG, "Rewarded Ad Complete: state = $state")
                         when (state) {
                             UnityAds.UnityAdsShowCompletionState.COMPLETED -> {
-                                scope.launch {
-                                    repository.recordRewardedCompleted()
-                                    _userMessages.emit(
-                                        UiMessage.Success(
-                                            message = "Congratulations! You earned +$REWARD_COINS_PER_AD Coins!",
-                                            isReward = true
+                                if (!rewardHandled) {
+                                    rewardHandled = true
+                                    scope.launch {
+                                        repository.recordRewardedCompleted()
+                                        _userMessages.emit(
+                                            UiMessage.Success(
+                                                message = "Congratulations! You earned +$REWARD_COINS_PER_AD Coins & ₹${REWARD_INR_PER_AD.toInt()} Cash!",
+                                                isReward = true
+                                            )
                                         )
-                                    )
+                                    }
                                 }
                             }
                             UnityAds.UnityAdsShowCompletionState.SKIPPED -> {
                                 scope.launch {
                                     repository.recordAdSkipped()
-                                    _userMessages.emit(UiMessage.Info("Ad was skipped. No coins rewarded."))
+                                    _userMessages.emit(UiMessage.Info("Ad was skipped. No coins or money awarded."))
                                 }
                             }
                             null -> {
