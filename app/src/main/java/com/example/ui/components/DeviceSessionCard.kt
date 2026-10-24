@@ -264,14 +264,15 @@ fun DeviceSessionCard(
 
 @Composable
 fun AppFooter(
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onAdminClick: (() -> Unit)? = null
 ) {
     Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -307,6 +308,20 @@ fun AppFooter(
             fontFamily = FontFamily.Monospace,
             textAlign = TextAlign.Center
         )
+
+        if (onAdminClick != null) {
+            TextButton(
+                onClick = onAdminClick,
+                modifier = Modifier.testTag("admin_portal_button")
+            ) {
+                Text(
+                    text = "⚙️ Admin Notification Panel",
+                    color = TextMuted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
     }
 }
 

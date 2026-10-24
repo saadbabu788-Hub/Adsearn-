@@ -257,6 +257,14 @@ class UnityAdsManager(
         }
     }
 
+    fun showRewardedAdIfReady(activity: Activity): Boolean {
+        if (_rewardedState.value is AdPlacementState.Ready) {
+            showRewardedAd(activity)
+            return true
+        }
+        return false
+    }
+
     fun requestShowInterstitialAd(activity: Activity) {
         if (_isWaitingForInterstitial.value || _interstitialState.value is AdPlacementState.Showing) {
             return

@@ -1,10 +1,13 @@
 package com.example
 
 import android.app.Activity
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -41,10 +45,12 @@ import com.example.ads.UiMessage
 import com.example.ui.MainViewModel
 import com.example.ui.components.AdActionButtons
 import com.example.ui.components.AdPerformanceCard
+import com.example.ui.components.AdminNotificationSheet
 import com.example.ui.components.AdsEngineStatusCard
 import com.example.ui.components.AppFooter
 import com.example.ui.components.CoinBalanceCard
 import com.example.ui.components.CoinConfettiOverlay
+import com.example.ui.components.DailySpinCard
 import com.example.ui.components.DeviceSessionCard
 import com.example.ui.components.HeaderCard
 import com.example.ui.components.NetworkLocationCard
@@ -87,8 +93,31 @@ fun AdsearnApp(
     val networkLocationState by viewModel.networkLocationState.collectAsStateWithLifecycle()
     val showCoinBurst by viewModel.showCoinBurst.collectAsStateWithLifecycle()
     val showWithdrawalSheet by viewModel.showWithdrawalSheet.collectAsStateWithLifecycle()
+    val isSpinning by viewModel.isSpinning.collectAsStateWithLifecycle()
+    val showAutoAdPrompt by viewModel.showAutoAdPrompt.collectAsStateWithLifecycle()
+    val autoAdCountdown by viewModel.autoAdCountdown.collectAsStateWithLifecycle()
+
+    var showAdminSheet by remember { androidx.compose.runtime.mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            viewModel.checkDailyReminderNotification(context)
+            com.example.notification.DailyNotificationScheduler.rescheduleAll(context)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        com.example.notification.DailyNotificationScheduler.rescheduleAll(context)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            viewModel.checkDailyReminderNotification(context)
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.snackbarMessages.collect { msg ->
@@ -148,8 +177,10 @@ fun AdsearnApp(
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // Header with Logo and Title
-                    HeaderCard()
+                    // Header with Logo, Title, and Admin Shortcut
+                    HeaderCard(
+                        onAdminClick = { showAdminSheet = true }
+                    )
 
                     // Coin & Rupee Balance Card with Withdraw Button
                     CoinBalanceCard(
@@ -179,6 +210,24 @@ fun AdsearnApp(
                         onReloadClick = { viewModel.reloadAds() }
                     )
 
+                    // Games Section with Daily Spin Wheel & Auto Rewarded Ad
+                    DailySpinCard(
+                        adStats = adStats,
+                        rewardedState = rewardedState,
+                        isSpinning = isSpinning,
+                        showAutoAdPrompt = showAutoAdPrompt,
+                        autoAdCountdown = autoAdCountdown,
+                        onSpinTriggered = { act, coins, onStartAnim ->
+                            viewModel.triggerSpin(act, coins, onStartAnim)
+                        },
+                        onConfirmWatchAutoAd = { act ->
+                            viewModel.confirmWatchAutoAd(act)
+                        },
+                        onDismissAutoAdPrompt = {
+                            viewModel.dismissAutoAdPrompt()
+                        }
+                    )
+
                     // Ad Performance Grid & Estimated Revenue
                     AdPerformanceCard(adStats = adStats)
 
@@ -195,8 +244,10 @@ fun AdsearnApp(
                         onResetStats = { viewModel.resetStats() }
                     )
 
-                    // Footer with Package Name and Mode
-                    AppFooter()
+                    // Footer with Package Name, Mode, and Admin Link
+                    AppFooter(
+                        onAdminClick = { showAdminSheet = true }
+                    )
                 }
 
                 // Coin Burst Particle Overlay on Reward
@@ -216,6 +267,15 @@ fun AdsearnApp(
                         onSubmitWithdrawal = { amount, upiId, email, onComplete ->
                             viewModel.submitWithdrawal(amount, upiId, email, onComplete)
                         }
+                    )
+                }
+
+                // Admin Notification BottomSheet
+                if (showAdminSheet) {
+                    val adminSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+                    AdminNotificationSheet(
+                        sheetState = adminSheetState,
+                        onDismiss = { showAdminSheet = false }
                     )
                 }
             }

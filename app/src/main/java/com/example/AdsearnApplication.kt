@@ -11,6 +11,9 @@ class AdsearnApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         initWebViewDirectories()
+        com.example.notification.DailySpinNotificationHelper.createNotificationChannel(this)
+        com.example.notification.DailyNotificationScheduler.createNotificationChannel(this)
+        com.example.notification.DailyNotificationScheduler.rescheduleAll(this)
     }
 
     private fun initWebViewDirectories() {

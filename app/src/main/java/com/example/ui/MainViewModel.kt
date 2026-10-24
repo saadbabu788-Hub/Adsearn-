@@ -56,6 +56,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _showWithdrawalSheet = MutableStateFlow(false)
     val showWithdrawalSheet: StateFlow<Boolean> = _showWithdrawalSheet.asStateFlow()
 
+    private val _isSpinning = MutableStateFlow(false)
+    val isSpinning: StateFlow<Boolean> = _isSpinning.asStateFlow()
+
+    private val _showAutoAdPrompt = MutableStateFlow(false)
+    val showAutoAdPrompt: StateFlow<Boolean> = _showAutoAdPrompt.asStateFlow()
+
+    private val _autoAdCountdown = MutableStateFlow(3)
+    val autoAdCountdown: StateFlow<Int> = _autoAdCountdown.asStateFlow()
+
+    private var autoAdJob: kotlinx.coroutines.Job? = null
+
     private val _snackbarMessages = MutableSharedFlow<UiMessage>(extraBufferCapacity = 10)
     val snackbarMessages: SharedFlow<UiMessage> = _snackbarMessages.asSharedFlow()
 
@@ -65,6 +76,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         // Fetch real network location
         fetchNetworkLocation()
+
+        // Sync initial daily spin state with reliable date
+        viewModelScope.launch {
+            val date = locationService.getReliableUtcDate()
+            repository.syncDailySpins(date)
+        }
 
         // Start live session timer
         startSessionTimer()
@@ -95,14 +112,121 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun fetchNetworkLocation() {
         viewModelScope.launch {
             _networkLocationState.value = NetworkLocationState.Loading
-            _networkLocationState.value = locationService.fetchNetworkLocation()
+            val result = locationService.fetchNetworkLocation()
+            _networkLocationState.value = result
+            if (result is NetworkLocationState.Success && result.data.serverDate.isNotBlank()) {
+                repository.syncDailySpins(result.data.serverDate)
+            }
         }
+    }
+
+    fun getEffectiveDate(): String {
+        val net = _networkLocationState.value
+        return if (net is NetworkLocationState.Success && net.data.serverDate.isNotBlank()) {
+            net.data.serverDate
+        } else {
+            locationService.getReliableUtcDate()
+        }
+    }
+
+    fun triggerSpin(
+        activity: Activity,
+        coinsWon: Int,
+        startWheelAnimation: (Int) -> Unit
+    ) {
+        if (_isSpinning.value) return
+        val currentStats = adStats.value
+        if (currentStats.spinsRemainingToday <= 0) {
+            _snackbarMessages.tryEmit(
+                UiMessage.Info("0 spins remaining today. Daily free spins reset tomorrow at 00:00 UTC!")
+            )
+            return
+        }
+
+        val isSecondSpin = (currentStats.spinsUsedToday == 1)
+
+        // Pre-warm and load the rewarded ad before the second spin finishes
+        if (isSecondSpin) {
+            adsManager.loadRewardedAd()
+        }
+
+        _isSpinning.value = true
+        startWheelAnimation(coinsWon)
+
+        viewModelScope.launch {
+            // Wheel animation duration is ~3.8 seconds
+            delay(3900)
+
+            val currentDate = getEffectiveDate()
+            val recorded = repository.recordSpinResult(coinsWon, currentDate)
+            if (recorded) {
+                _snackbarMessages.emit(
+                    UiMessage.Success(
+                        message = "🎉 You won +$coinsWon Coins from Daily Spin!",
+                        isReward = true
+                    )
+                )
+                _showCoinBurst.value = true
+            }
+
+            _isSpinning.value = false
+
+            // Immediately after the second spin is completed, automatically attempt rewarded ad flow
+            if (isSecondSpin && recorded) {
+                launchAutoAdFlow(activity)
+            }
+        }
+    }
+
+    private fun launchAutoAdFlow(activity: Activity) {
+        autoAdJob?.cancel()
+        _showAutoAdPrompt.value = true
+        _autoAdCountdown.value = 3
+
+        autoAdJob = viewModelScope.launch {
+            for (sec in 3 downTo 1) {
+                _autoAdCountdown.value = sec
+                delay(1000)
+            }
+            _autoAdCountdown.value = 0
+            if (_showAutoAdPrompt.value) {
+                _showAutoAdPrompt.value = false
+                executeAutoRewardedAd(activity)
+            }
+        }
+    }
+
+    fun confirmWatchAutoAd(activity: Activity) {
+        autoAdJob?.cancel()
+        _showAutoAdPrompt.value = false
+        executeAutoRewardedAd(activity)
+    }
+
+    fun dismissAutoAdPrompt() {
+        autoAdJob?.cancel()
+        _showAutoAdPrompt.value = false
+    }
+
+    private fun executeAutoRewardedAd(activity: Activity) {
+        if (adsManager.rewardedState.value is AdPlacementState.Ready) {
+            adsManager.showRewardedAdIfReady(activity)
+        } else {
+            _snackbarMessages.tryEmit(
+                UiMessage.Info("No ad available right now. Please try again later.")
+            )
+        }
+    }
+
+    fun checkDailyReminderNotification(context: android.content.Context) {
+        val remaining = adStats.value.spinsRemainingToday
+        val currentDate = getEffectiveDate()
+        com.example.notification.DailySpinNotificationHelper.notifyDailySpinsAvailable(context, remaining, currentDate)
     }
 
     fun resetStats() {
         viewModelScope.launch {
             repository.resetStats()
-            _snackbarMessages.emit(UiMessage.Info("All ad counters reset to 0."))
+            _snackbarMessages.emit(UiMessage.Info("All ad counters & spin limits reset."))
         }
     }
 

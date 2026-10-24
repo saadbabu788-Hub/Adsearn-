@@ -35,10 +35,13 @@ import com.example.ui.theme.GoldCoinDark
 import com.example.ui.theme.PurplePrimary
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
+import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material3.IconButton
 
 @Composable
 fun HeaderCard(
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onAdminClick: (() -> Unit)? = null
 ) {
     Box(
         modifier = modifier
@@ -125,6 +128,20 @@ fun HeaderCard(
                     fontWeight = FontWeight.Medium,
                     lineHeight = 16.sp
                 )
+            }
+
+            if (onAdminClick != null) {
+                IconButton(
+                    onClick = onAdminClick,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AdminPanelSettings,
+                        contentDescription = "Admin Notifications",
+                        tint = TextMuted,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
         }
     }

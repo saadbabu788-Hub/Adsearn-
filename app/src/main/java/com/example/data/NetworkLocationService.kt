@@ -14,7 +14,8 @@ data class NetworkLocationInfo(
     val region: String,
     val city: String,
     val isp: String,
-    val timezone: String
+    val timezone: String,
+    val serverDate: String = ""
 )
 
 sealed interface NetworkLocationState {
@@ -71,6 +72,14 @@ class NetworkLocationService {
                     ?: timezoneObj?.optString("utc")?.ifEmpty { null }
                     ?: "UTC"
 
+                val rawTime = timezoneObj?.optString("current_time", "") ?: ""
+                val serverDate = if (rawTime.length >= 10 && rawTime.startsWith("20")) {
+                    rawTime.substring(0, 10)
+                } else {
+                    val dateHeader = response.header("Date")
+                    parseHttpDate(dateHeader) ?: getReliableUtcDate()
+                }
+
                 NetworkLocationState.Success(
                     NetworkLocationInfo(
                         ip = ip,
@@ -79,13 +88,35 @@ class NetworkLocationService {
                         region = region,
                         city = city,
                         isp = isp,
-                        timezone = timezone
+                        timezone = timezone,
+                        serverDate = serverDate
                     )
                 )
             }
         } catch (e: Exception) {
             NetworkLocationState.Error(e.message ?: "Failed to connect to network service")
         }
+    }
+
+    private fun parseHttpDate(httpDate: String?): String? {
+        if (httpDate.isNullOrBlank()) return null
+        return try {
+            val rfc1123 = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", java.util.Locale.US)
+            val d = rfc1123.parse(httpDate)
+            if (d != null) {
+                val outFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                outFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                outFormat.format(d)
+            } else null
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    fun getReliableUtcDate(): String {
+        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+        sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        return sdf.format(java.util.Date())
     }
 
     private fun getFlagEmoji(countryCode: String): String {

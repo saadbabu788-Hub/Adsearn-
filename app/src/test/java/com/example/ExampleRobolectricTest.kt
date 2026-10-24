@@ -72,4 +72,47 @@ class ExampleRobolectricTest {
         assertEquals("ra***ar@okaxis", request.maskedUpi)
         assertEquals("Pending", request.status.displayName)
     }
+
+    @Test
+    fun `verify daily spin limits and calculations`() {
+        val initialStats = AdStats(spinsUsedToday = 0)
+        assertEquals(2, initialStats.spinsRemainingToday)
+
+        val oneSpinStats = AdStats(spinsUsedToday = 1)
+        assertEquals(1, oneSpinStats.spinsRemainingToday)
+
+        val twoSpinsStats = AdStats(spinsUsedToday = 2)
+        assertEquals(0, twoSpinsStats.spinsRemainingToday)
+
+        // Safety bound: exceeding 2 never goes negative
+        val extraSpinsStats = AdStats(spinsUsedToday = 5)
+        assertEquals(0, extraSpinsStats.spinsRemainingToday)
+    }
+
+    @Test
+    fun `verify repository records spins and blocks extra spins`() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val repository = com.example.data.AdStatsRepository(context)
+
+        val testDate = "2026-10-24"
+        repository.syncDailySpins(testDate)
+
+        // Spin 1
+        val spin1Success = repository.recordSpinResult(coins = 25, currentDate = testDate)
+        assertTrue(spin1Success)
+
+        // Spin 2
+        val spin2Success = repository.recordSpinResult(coins = 50, currentDate = testDate)
+        assertTrue(spin2Success)
+
+        // Spin 3 attempted on same date should be blocked
+        val spin3Success = repository.recordSpinResult(coins = 100, currentDate = testDate)
+        assertFalse(spin3Success)
+
+        // Next day (date rollover) should reset and allow new spins
+        val nextDate = "2026-10-25"
+        repository.syncDailySpins(nextDate)
+        val nextDaySpin1 = repository.recordSpinResult(coins = 10, currentDate = nextDate)
+        assertTrue(nextDaySpin1)
+    }
 }

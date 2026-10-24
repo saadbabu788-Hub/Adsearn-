@@ -76,10 +76,16 @@ data class AdStats(
     val loadFailed: Int = 0,
     val totalRupeesEarned: Double = 0.0,
     val availableRupeesBalance: Double = 0.0,
-    val withdrawalRequests: List<WithdrawalRequest> = emptyList()
+    val withdrawalRequests: List<WithdrawalRequest> = emptyList(),
+    val lastSpinDate: String = "",
+    val spinsUsedToday: Int = 0,
+    val lastSpinRewardCoins: Int = 0
 ) {
     val totalImpressions: Int
         get() = rewardedWatched + interstitialsShown
+
+    val spinsRemainingToday: Int
+        get() = maxOf(0, com.example.MAX_DAILY_SPINS - spinsUsedToday)
 
     val ctrPercent: Double
         get() = if (totalImpressions > 0) {
@@ -108,6 +114,9 @@ class AdStatsRepository(private val context: Context) {
         val TOTAL_RUPEES_EARNED = doublePreferencesKey("total_rupees_earned")
         val AVAILABLE_RUPEES_BALANCE = doublePreferencesKey("available_rupees_balance")
         val WITHDRAWAL_REQUESTS_JSON = stringPreferencesKey("withdrawal_requests_json")
+        val LAST_SPIN_DATE = stringPreferencesKey("last_spin_date")
+        val SPINS_USED_TODAY = intPreferencesKey("spins_used_today")
+        val LAST_SPIN_REWARD_COINS = intPreferencesKey("last_spin_reward_coins")
     }
 
     val statsFlow: Flow<AdStats> = context.adStatsDataStore.data
@@ -126,6 +135,10 @@ class AdStatsRepository(private val context: Context) {
             val requestsJson = preferences[PreferencesKeys.WITHDRAWAL_REQUESTS_JSON]
             val requests = parseWithdrawalRequests(requestsJson)
 
+            val lastSpinDate = preferences[PreferencesKeys.LAST_SPIN_DATE] ?: ""
+            val spinsUsedToday = preferences[PreferencesKeys.SPINS_USED_TODAY] ?: 0
+            val lastSpinRewardCoins = preferences[PreferencesKeys.LAST_SPIN_REWARD_COINS] ?: 0
+
             AdStats(
                 totalClicks = preferences[PreferencesKeys.TOTAL_CLICKS] ?: 0,
                 rewardedWatched = rewardedWatched,
@@ -136,7 +149,10 @@ class AdStatsRepository(private val context: Context) {
                 loadFailed = preferences[PreferencesKeys.LOAD_FAILED] ?: 0,
                 totalRupeesEarned = totalRupeesEarned,
                 availableRupeesBalance = availableBalance,
-                withdrawalRequests = requests
+                withdrawalRequests = requests,
+                lastSpinDate = lastSpinDate,
+                spinsUsedToday = spinsUsedToday,
+                lastSpinRewardCoins = lastSpinRewardCoins
             )
         }
 
@@ -277,6 +293,43 @@ class AdStatsRepository(private val context: Context) {
         }
     }
 
+    suspend fun syncDailySpins(currentDate: String) {
+        if (currentDate.isBlank()) return
+        context.adStatsDataStore.edit { preferences ->
+            val lastDate = preferences[PreferencesKeys.LAST_SPIN_DATE] ?: ""
+            if (lastDate != currentDate) {
+                preferences[PreferencesKeys.LAST_SPIN_DATE] = currentDate
+                preferences[PreferencesKeys.SPINS_USED_TODAY] = 0
+            }
+        }
+    }
+
+    suspend fun recordSpinResult(coins: Int, currentDate: String): Boolean {
+        var success = false
+        context.adStatsDataStore.edit { preferences ->
+            val lastDate = preferences[PreferencesKeys.LAST_SPIN_DATE] ?: ""
+            val usedToday = if (lastDate == currentDate) {
+                preferences[PreferencesKeys.SPINS_USED_TODAY] ?: 0
+            } else {
+                0
+            }
+
+            if (usedToday >= com.example.MAX_DAILY_SPINS) {
+                success = false
+                return@edit
+            }
+
+            preferences[PreferencesKeys.LAST_SPIN_DATE] = currentDate
+            preferences[PreferencesKeys.SPINS_USED_TODAY] = usedToday + 1
+            preferences[PreferencesKeys.LAST_SPIN_REWARD_COINS] = coins
+
+            val currentCoins = preferences[PreferencesKeys.TOTAL_COINS_EARNED] ?: 0
+            preferences[PreferencesKeys.TOTAL_COINS_EARNED] = currentCoins + coins
+            success = true
+        }
+        return success
+    }
+
     suspend fun resetStats() {
         context.adStatsDataStore.edit { preferences ->
             preferences[PreferencesKeys.TOTAL_CLICKS] = 0
@@ -288,6 +341,8 @@ class AdStatsRepository(private val context: Context) {
             preferences[PreferencesKeys.LOAD_FAILED] = 0
             preferences[PreferencesKeys.TOTAL_RUPEES_EARNED] = 0.0
             preferences[PreferencesKeys.AVAILABLE_RUPEES_BALANCE] = 0.0
+            preferences[PreferencesKeys.SPINS_USED_TODAY] = 0
+            preferences[PreferencesKeys.LAST_SPIN_REWARD_COINS] = 0
         }
     }
 
