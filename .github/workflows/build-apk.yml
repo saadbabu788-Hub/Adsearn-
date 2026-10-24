@@ -49,10 +49,13 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
-      - name: Create temporary debug keystore
+      - name: Create or restore debug keystore
         run: |
           if [ -f "./debug.keystore" ]; then
             echo "./debug.keystore already exists."
+          elif [ -f "./debug.keystore.base64" ]; then
+            echo "Restoring persistent debug.keystore from debug.keystore.base64..."
+            base64 -d ./debug.keystore.base64 > ./debug.keystore
           else
             echo "Generating temporary debug.keystore..."
             keytool -genkeypair \
@@ -69,10 +72,29 @@ jobs:
             echo "Error: Failed to create ./debug.keystore"
             exit 1
           fi
-          echo "Temporary debug keystore verified."
+          echo "Debug keystore verified."
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Ensure APK dual v1 and v2 signing
+        run: |
+          APKSIGNER=$(find ${ANDROID_HOME:-/opt/android/sdk}/build-tools -name apksigner 2>/dev/null | sort -V | tail -n 1)
+          if [ -n "$APKSIGNER" ] && [ -x "$APKSIGNER" ]; then
+            echo "Applying apksigner with dual v1 and v2 signing: $APKSIGNER"
+            $APKSIGNER sign \
+              --ks ./debug.keystore \
+              --ks-pass pass:android \
+              --key-pass pass:android \
+              --min-sdk-version 24 \
+              --v1-signing-enabled true \
+              --v2-signing-enabled true \
+              app/build/outputs/apk/debug/app-debug.apk
+            echo "Verifying APK signatures:"
+            $APKSIGNER verify --verbose app/build/outputs/apk/debug/app-debug.apk
+          else
+            echo "apksigner not found; continuing with Gradle APK signature."
+          fi
 
       - name: Verify debug APK
         run: |
