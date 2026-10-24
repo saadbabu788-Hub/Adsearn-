@@ -315,7 +315,7 @@ fun AppFooter(
                 modifier = Modifier.testTag("admin_portal_button")
             ) {
                 Text(
-                    text = "⚙️ Admin Notification Panel",
+                    text = "🔐 Adsearn Admin Login",
                     color = TextMuted,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium

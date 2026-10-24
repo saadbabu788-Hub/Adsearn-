@@ -20,8 +20,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.CurrencyRupee
 import androidx.compose.material.icons.filled.MonetizationOn
 import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -45,7 +47,6 @@ import com.example.ui.theme.GoldCoin
 import com.example.ui.theme.GoldCoinDark
 import com.example.ui.theme.GoldCoinLight
 import com.example.ui.theme.PurplePrimary
-import com.example.ui.theme.PurpleSecondary
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -55,6 +56,7 @@ fun CoinBalanceCard(
     coins: Int,
     availableRupees: Double = 0.0,
     onWithdrawClick: () -> Unit = {},
+    onRedeemCoinsClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val animatedCoins by animateIntAsState(
@@ -69,7 +71,8 @@ fun CoinBalanceCard(
         label = "RupeesCountAnimation"
     )
 
-    val isEligible = availableRupees >= MIN_WITHDRAWAL_INR
+    val isEligibleForWithdraw = availableRupees >= MIN_WITHDRAWAL_INR
+    val isEligibleToRedeem = coins >= 20
 
     Box(
         modifier = modifier
@@ -161,24 +164,57 @@ fun CoinBalanceCard(
                         )
                     }
 
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Clickable Coin Balance when coins >= 20
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .then(
+                                if (isEligibleToRedeem) {
+                                    Modifier
+                                        .clickable { onRedeemCoinsClick() }
+                                        .background(GoldCoin.copy(alpha = 0.12f))
+                                        .border(1.dp, GoldCoin.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                } else {
+                                    Modifier.padding(vertical = 4.dp)
+                                }
+                            )
+                            .testTag("coin_balance_clickable")
+                    ) {
                         Icon(
                             imageVector = Icons.Default.MonetizationOn,
                             contentDescription = null,
                             tint = GoldCoin,
-                            modifier = Modifier.size(14.dp)
+                            modifier = Modifier.size(16.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
                         Text(
-                            text = "$animatedCoins Coins earned",
-                            color = TextSecondary,
+                            text = "$animatedCoins Coins",
+                            color = if (isEligibleToRedeem) GoldCoinLight else TextSecondary,
                             fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium
+                            fontWeight = if (isEligibleToRedeem) FontWeight.Bold else FontWeight.Medium
                         )
+                        if (isEligibleToRedeem) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Icon(
+                                imageVector = Icons.Default.SwapHoriz,
+                                contentDescription = "Redeem",
+                                tint = EmeraldSuccess,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Text(
+                                text = "Redeem (20=₹3)",
+                                color = EmeraldSuccess,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
 
-                // Glowing Gold Coin Icon Badge
+                // Glowing Gold Coin Icon Badge (Clickable when coins >= 20)
                 Box(
                     modifier = Modifier
                         .size(56.dp)
@@ -196,6 +232,11 @@ fun CoinBalanceCard(
                             2.dp,
                             Brush.linearGradient(listOf(GoldCoinLight, GoldCoinDark)),
                             CircleShape
+                        )
+                        .then(
+                            if (isEligibleToRedeem) {
+                                Modifier.clickable { onRedeemCoinsClick() }
+                            } else Modifier
                         ),
                     contentAlignment = Alignment.Center
                 ) {
@@ -208,13 +249,59 @@ fun CoinBalanceCard(
                 }
             }
 
+            // Quick Redeem Banner if coins >= 20
+            if (isEligibleToRedeem) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(GoldCoinDark.copy(alpha = 0.25f), Color(0x33451A03))
+                            )
+                        )
+                        .border(1.dp, GoldCoin.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                        .clickable { onRedeemCoinsClick() }
+                        .testTag("redeem_coins_banner_button")
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.MonetizationOn,
+                                contentDescription = null,
+                                tint = GoldCoin,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Eligible to convert $coins Coins to ₹${((coins / 20) * 3)} Cash",
+                                color = GoldCoinLight,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Text(
+                            text = "Redeem Now ➔",
+                            color = EmeraldSuccess,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
             // Accessible Withdraw Action Bar
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(14.dp))
                     .background(
-                        if (isEligible) {
+                        if (isEligibleForWithdraw) {
                             Brush.horizontalGradient(
                                 listOf(EmeraldSuccess.copy(alpha = 0.25f), Color(0x33064E3B))
                             )
@@ -226,7 +313,7 @@ fun CoinBalanceCard(
                     )
                     .border(
                         1.dp,
-                        if (isEligible) EmeraldSuccess.copy(alpha = 0.6f) else Color(0x25FFFFFF),
+                        if (isEligibleForWithdraw) EmeraldSuccess.copy(alpha = 0.6f) else Color(0x25FFFFFF),
                         RoundedCornerShape(14.dp)
                     )
                     .clickable { onWithdrawClick() }
@@ -242,7 +329,7 @@ fun CoinBalanceCard(
                         Icon(
                             imageVector = Icons.Default.Payments,
                             contentDescription = "Withdraw",
-                            tint = if (isEligible) EmeraldSuccess else GoldCoinLight,
+                            tint = if (isEligibleForWithdraw) EmeraldSuccess else GoldCoinLight,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -254,8 +341,8 @@ fun CoinBalanceCard(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = if (isEligible) "Ready to payout via UPI" else "Min. ₹${MIN_WITHDRAWAL_INR.toInt()} (Need ₹${(MIN_WITHDRAWAL_INR - availableRupees).coerceAtLeast(0.0).toInt()} more)",
-                                color = if (isEligible) EmeraldSuccess else TextMuted,
+                                text = if (isEligibleForWithdraw) "Ready to payout via UPI" else "Min. ₹${MIN_WITHDRAWAL_INR.toInt()} (Need ₹${(MIN_WITHDRAWAL_INR - availableRupees).coerceAtLeast(0.0).toInt()} more)",
+                                color = if (isEligibleForWithdraw) EmeraldSuccess else TextMuted,
                                 fontSize = 11.sp
                             )
                         }
@@ -265,13 +352,13 @@ fun CoinBalanceCard(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
                             .background(
-                                if (isEligible) EmeraldSuccess else PurplePrimary.copy(alpha = 0.3f)
+                                if (isEligibleForWithdraw) EmeraldSuccess else PurplePrimary.copy(alpha = 0.3f)
                             )
                             .padding(horizontal = 10.dp, vertical = 5.dp)
                     ) {
                         Text(
-                            text = if (isEligible) "Withdraw Now" else "View Status",
-                            color = if (isEligible) Color.Black else TextPrimary,
+                            text = if (isEligibleForWithdraw) "Withdraw Now" else "View Status",
+                            color = if (isEligibleForWithdraw) Color.Black else TextPrimary,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )

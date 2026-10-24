@@ -3,6 +3,7 @@ package com.example.data
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
@@ -47,7 +48,8 @@ data class WithdrawalRequest(
     val email: String? = null,
     val timestamp: Long = System.currentTimeMillis(),
     val status: WithdrawalStatus = WithdrawalStatus.PENDING,
-    val note: String? = null
+    val note: String? = null,
+    val refunded: Boolean = false
 ) {
     val maskedUpi: String
         get() {
@@ -79,7 +81,13 @@ data class AdStats(
     val withdrawalRequests: List<WithdrawalRequest> = emptyList(),
     val lastSpinDate: String = "",
     val spinsUsedToday: Int = 0,
-    val lastSpinRewardCoins: Int = 0
+    val lastSpinRewardCoins: Int = 0,
+    val coinRedemptions: List<CoinRedemptionTransaction> = emptyList(),
+    val referralState: ReferralState = ReferralState(),
+    val referralSettings: ReferralCampaignSettings = ReferralCampaignSettings(),
+    val gamesCatalog: List<AdminGameItem> = DefaultGamesCatalog.getDefaultGames(),
+    val appVersionInfo: AppVersionInfo = AppVersionInfo(),
+    val auditLogs: List<AdminAuditLog> = emptyList()
 ) {
     val totalImpressions: Int
         get() = rewardedWatched + interstitialsShown
@@ -99,6 +107,9 @@ data class AdStats(
 
     val isEligibleForWithdrawal: Boolean
         get() = availableRupeesBalance >= MIN_WITHDRAWAL_INR
+
+    val isEligibleToRedeemCoins: Boolean
+        get() = totalCoinsEarned >= CoinRedemptionTransaction.COINS_PER_UNIT
 }
 
 class AdStatsRepository(private val context: Context) {
@@ -117,6 +128,16 @@ class AdStatsRepository(private val context: Context) {
         val LAST_SPIN_DATE = stringPreferencesKey("last_spin_date")
         val SPINS_USED_TODAY = intPreferencesKey("spins_used_today")
         val LAST_SPIN_REWARD_COINS = intPreferencesKey("last_spin_reward_coins")
+
+        // New feature keys
+        val COIN_REDEMPTIONS_JSON = stringPreferencesKey("coin_redemptions_json")
+        val MY_REFERRAL_CODE = stringPreferencesKey("my_referral_code")
+        val REFERRAL_STATE_JSON = stringPreferencesKey("referral_state_json")
+        val REFERRAL_SETTINGS_JSON = stringPreferencesKey("referral_settings_json")
+        val GAMES_CATALOG_JSON = stringPreferencesKey("games_catalog_json")
+        val APP_VERSION_INFO_JSON = stringPreferencesKey("app_version_info_json")
+        val ADMIN_AUDIT_LOGS_JSON = stringPreferencesKey("admin_audit_logs_json")
+        val ADMIN_PASSWORD_HASH = stringPreferencesKey("admin_password_hash")
     }
 
     val statsFlow: Flow<AdStats> = context.adStatsDataStore.data
@@ -139,6 +160,18 @@ class AdStatsRepository(private val context: Context) {
             val spinsUsedToday = preferences[PreferencesKeys.SPINS_USED_TODAY] ?: 0
             val lastSpinRewardCoins = preferences[PreferencesKeys.LAST_SPIN_REWARD_COINS] ?: 0
 
+            val redemptions = parseCoinRedemptions(preferences[PreferencesKeys.COIN_REDEMPTIONS_JSON])
+
+            var myCode = preferences[PreferencesKeys.MY_REFERRAL_CODE] ?: ""
+            if (myCode.isBlank()) {
+                myCode = generateReferralCode()
+            }
+            val refState = parseReferralState(preferences[PreferencesKeys.REFERRAL_STATE_JSON], myCode)
+            val refSettings = parseReferralSettings(preferences[PreferencesKeys.REFERRAL_SETTINGS_JSON])
+            val games = parseGamesCatalog(preferences[PreferencesKeys.GAMES_CATALOG_JSON])
+            val appVersion = parseAppVersionInfo(preferences[PreferencesKeys.APP_VERSION_INFO_JSON])
+            val auditLogs = parseAuditLogs(preferences[PreferencesKeys.ADMIN_AUDIT_LOGS_JSON])
+
             AdStats(
                 totalClicks = preferences[PreferencesKeys.TOTAL_CLICKS] ?: 0,
                 rewardedWatched = rewardedWatched,
@@ -152,7 +185,13 @@ class AdStatsRepository(private val context: Context) {
                 withdrawalRequests = requests,
                 lastSpinDate = lastSpinDate,
                 spinsUsedToday = spinsUsedToday,
-                lastSpinRewardCoins = lastSpinRewardCoins
+                lastSpinRewardCoins = lastSpinRewardCoins,
+                coinRedemptions = redemptions,
+                referralState = refState,
+                referralSettings = refSettings,
+                gamesCatalog = games,
+                appVersionInfo = appVersion,
+                auditLogs = auditLogs
             )
         }
 
@@ -205,6 +244,54 @@ class AdStatsRepository(private val context: Context) {
         }
     }
 
+    // --- COIN EARNING & REDEEM SYSTEM (20 coins = ₹3) ---
+    suspend fun redeemCoins(coinsToRedeem: Int): Result<CoinRedemptionTransaction> {
+        if (!CoinRedemptionTransaction.isValidMultiples(coinsToRedeem)) {
+            return Result.failure(
+                IllegalArgumentException("Coins to redeem must be in multiples of 20 (e.g. 20 coins = ₹3, 40 coins = ₹6, 100 coins = ₹15).")
+            )
+        }
+
+        val rupeesEarned = CoinRedemptionTransaction.calculateRupees(coinsToRedeem)
+        var resultTransaction: CoinRedemptionTransaction? = null
+        var failureMessage: String? = null
+
+        context.adStatsDataStore.edit { preferences ->
+            val currentCoins = preferences[PreferencesKeys.TOTAL_COINS_EARNED] ?: 0
+            if (currentCoins < coinsToRedeem) {
+                failureMessage = "Insufficient coins! You have $currentCoins coins, but tried to redeem $coinsToRedeem."
+                return@edit
+            }
+
+            val currentAvailableRupees = preferences[PreferencesKeys.AVAILABLE_RUPEES_BALANCE] ?: 0.0
+            val currentTotalRupees = preferences[PreferencesKeys.TOTAL_RUPEES_EARNED] ?: 0.0
+
+            // Deduct coins and credit equivalent rupees atomically
+            preferences[PreferencesKeys.TOTAL_COINS_EARNED] = currentCoins - coinsToRedeem
+            preferences[PreferencesKeys.AVAILABLE_RUPEES_BALANCE] = currentAvailableRupees + rupeesEarned
+            preferences[PreferencesKeys.TOTAL_RUPEES_EARNED] = currentTotalRupees + rupeesEarned
+
+            val existingRedemptions = parseCoinRedemptions(preferences[PreferencesKeys.COIN_REDEMPTIONS_JSON])
+            val newTx = CoinRedemptionTransaction(
+                id = UUID.randomUUID().toString(),
+                coinsRedeemed = coinsToRedeem,
+                rupeesCredited = rupeesEarned,
+                timestamp = System.currentTimeMillis(),
+                status = "Completed"
+            )
+            preferences[PreferencesKeys.COIN_REDEMPTIONS_JSON] = serializeCoinRedemptions(listOf(newTx) + existingRedemptions)
+            resultTransaction = newTx
+        }
+
+        return if (resultTransaction != null) {
+            recordAuditLogInternal("COIN_REDEEM", "User redeemed $coinsToRedeem coins for ₹${rupeesEarned.toInt()} Cash.")
+            Result.success(resultTransaction!!)
+        } else {
+            Result.failure(IllegalStateException(failureMessage ?: "Failed to process coin redemption."))
+        }
+    }
+
+    // --- WALLET & WITHDRAWAL SYSTEM (Minimum ₹500, UPI ID Required) ---
     suspend fun submitWithdrawal(
         amount: Double,
         upiId: String,
@@ -262,6 +349,7 @@ class AdStatsRepository(private val context: Context) {
         }
 
         return if (resultRequest != null) {
+            recordAuditLogInternal("WITHDRAWAL_SUBMIT", "User submitted withdrawal of ₹${amount.toInt()} to UPI ${cleanUpi.take(4)}***.")
             Result.success(resultRequest!!)
         } else {
             Result.failure(IllegalStateException(failureReason ?: "Failed to process withdrawal request."))
@@ -275,10 +363,17 @@ class AdStatsRepository(private val context: Context) {
 
             val updatedList = currentRequests.map { req ->
                 if (req.id == requestId) {
-                    if (newStatus == WithdrawalStatus.REJECTED && req.status != WithdrawalStatus.REJECTED) {
+                    val shouldRefund = (newStatus == WithdrawalStatus.REJECTED && !req.refunded)
+                    if (shouldRefund) {
                         refundAmount += req.amountInr
                     }
-                    req.copy(status = newStatus)
+                    req.copy(
+                        status = newStatus,
+                        refunded = if (shouldRefund) true else req.refunded,
+                        note = if (newStatus == WithdrawalStatus.REJECTED) {
+                            "Rejected by Admin. Reserved ₹${req.amountInr.toInt()} refunded to wallet balance."
+                        } else req.note
+                    )
                 } else {
                     req
                 }
@@ -291,8 +386,159 @@ class AdStatsRepository(private val context: Context) {
 
             preferences[PreferencesKeys.WITHDRAWAL_REQUESTS_JSON] = serializeWithdrawalRequests(updatedList)
         }
+        recordAuditLogInternal("WITHDRAWAL_STATUS_UPDATE", "Request $requestId updated to ${newStatus.displayName}.")
     }
 
+    // --- REFERRAL & EARN SYSTEM ---
+    suspend fun applyReferralCode(codeToApply: String): Result<Double> {
+        val cleanCode = codeToApply.trim().uppercase()
+        if (cleanCode.length < 5) {
+            return Result.failure(IllegalArgumentException("Invalid referral code length."))
+        }
+
+        var rewardGiven = 0.0
+        var errorMsg: String? = null
+
+        context.adStatsDataStore.edit { preferences ->
+            var myCode = preferences[PreferencesKeys.MY_REFERRAL_CODE] ?: ""
+            if (myCode.isBlank()) {
+                myCode = generateReferralCode()
+                preferences[PreferencesKeys.MY_REFERRAL_CODE] = myCode
+            }
+
+            if (cleanCode.equals(myCode, ignoreCase = true)) {
+                errorMsg = "You cannot refer yourself! Please share your code with friends."
+                return@edit
+            }
+
+            val refState = parseReferralState(preferences[PreferencesKeys.REFERRAL_STATE_JSON], myCode)
+            if (refState.appliedReferrerCode != null) {
+                errorMsg = "You have already applied a referral code (${refState.appliedReferrerCode})."
+                return@edit
+            }
+
+            val refSettings = parseReferralSettings(preferences[PreferencesKeys.REFERRAL_SETTINGS_JSON])
+            val isFirst = !refState.firstReferralClaimed
+            val rewardAmount = if (isFirst) refSettings.firstReferralRewardInr else refSettings.subsequentReferralRewardInr
+
+            val newRecord = ReferralRecord(
+                id = UUID.randomUUID().toString(),
+                friendCode = cleanCode,
+                rewardInr = rewardAmount,
+                isFirstReferral = isFirst,
+                timestamp = System.currentTimeMillis(),
+                status = "Credited"
+            )
+
+            val updatedState = refState.copy(
+                totalReferralsCount = refState.totalReferralsCount + 1,
+                firstReferralClaimed = true,
+                totalReferralRupeesCredited = refState.totalReferralRupeesCredited + rewardAmount,
+                referralHistory = listOf(newRecord) + refState.referralHistory,
+                appliedReferrerCode = cleanCode
+            )
+
+            // Credit the wallet atomically
+            val currentAvailable = preferences[PreferencesKeys.AVAILABLE_RUPEES_BALANCE] ?: 0.0
+            val currentTotal = preferences[PreferencesKeys.TOTAL_RUPEES_EARNED] ?: 0.0
+            preferences[PreferencesKeys.AVAILABLE_RUPEES_BALANCE] = currentAvailable + rewardAmount
+            preferences[PreferencesKeys.TOTAL_RUPEES_EARNED] = currentTotal + rewardAmount
+            preferences[PreferencesKeys.REFERRAL_STATE_JSON] = serializeReferralState(updatedState)
+            rewardGiven = rewardAmount
+        }
+
+        return if (rewardGiven > 0.0) {
+            recordAuditLogInternal("REFERRAL_APPLIED", "Applied referral code $cleanCode. Credited ₹${rewardGiven.toInt()} reward.")
+            Result.success(rewardGiven)
+        } else {
+            Result.failure(IllegalStateException(errorMsg ?: "Failed to apply referral code."))
+        }
+    }
+
+    suspend fun updateReferralSettings(settings: ReferralCampaignSettings) {
+        context.adStatsDataStore.edit { preferences ->
+            preferences[PreferencesKeys.REFERRAL_SETTINGS_JSON] = serializeReferralSettings(settings)
+        }
+        recordAuditLogInternal(
+            "UPDATE_REFERRAL_SETTINGS",
+            "1st Referral: ₹${settings.firstReferralRewardInr.toInt()}, Subsequent: ₹${settings.subsequentReferralRewardInr.toInt()}"
+        )
+    }
+
+    // --- GAMES CATALOG MANAGEMENT ---
+    suspend fun addOrUpdateGame(game: AdminGameItem) {
+        context.adStatsDataStore.edit { preferences ->
+            val games = parseGamesCatalog(preferences[PreferencesKeys.GAMES_CATALOG_JSON])
+            val existingIndex = games.indexOfFirst { it.id == game.id }
+            val updated = if (existingIndex >= 0) {
+                games.toMutableList().apply { set(existingIndex, game) }
+            } else {
+                games + game
+            }
+            preferences[PreferencesKeys.GAMES_CATALOG_JSON] = serializeGamesCatalog(updated)
+        }
+        recordAuditLogInternal("UPDATE_GAME", "Game ${game.title} (ID: ${game.id}) saved.")
+    }
+
+    suspend fun toggleGamePublished(gameId: String, isPublished: Boolean) {
+        context.adStatsDataStore.edit { preferences ->
+            val games = parseGamesCatalog(preferences[PreferencesKeys.GAMES_CATALOG_JSON])
+            val updated = games.map { if (it.id == gameId) it.copy(isPublished = isPublished) else it }
+            preferences[PreferencesKeys.GAMES_CATALOG_JSON] = serializeGamesCatalog(updated)
+        }
+        recordAuditLogInternal("TOGGLE_GAME_PUBLISHED", "Game ID $gameId published state: $isPublished")
+    }
+
+    suspend fun deleteGame(gameId: String) {
+        context.adStatsDataStore.edit { preferences ->
+            val games = parseGamesCatalog(preferences[PreferencesKeys.GAMES_CATALOG_JSON])
+            val updated = games.filterNot { it.id == gameId }
+            preferences[PreferencesKeys.GAMES_CATALOG_JSON] = serializeGamesCatalog(updated)
+        }
+        recordAuditLogInternal("DELETE_GAME", "Game ID $gameId removed.")
+    }
+
+    suspend fun awardGameCoins(coins: Int, gameTitle: String) {
+        context.adStatsDataStore.edit { preferences ->
+            val currentCoins = preferences[PreferencesKeys.TOTAL_COINS_EARNED] ?: 0
+            preferences[PreferencesKeys.TOTAL_COINS_EARNED] = currentCoins + coins
+        }
+        recordAuditLogInternal("AWARD_GAME_COINS", "Awarded +$coins coins for playing $gameTitle.")
+    }
+
+    // --- APP UPDATE SYSTEM ---
+    suspend fun updateAppVersionInfo(info: AppVersionInfo) {
+        context.adStatsDataStore.edit { preferences ->
+            preferences[PreferencesKeys.APP_VERSION_INFO_JSON] = serializeAppVersionInfo(info)
+        }
+        recordAuditLogInternal("UPDATE_APP_VERSION", "Latest Version: ${info.latestVersionName} (Code: ${info.latestVersionCode})")
+    }
+
+    // --- AUDIT LOG & SECURITY ---
+    suspend fun recordAuditLog(action: String, details: String) {
+        recordAuditLogInternal(action, details)
+    }
+
+    private suspend fun recordAuditLogInternal(action: String, details: String) {
+        try {
+            context.adStatsDataStore.edit { preferences ->
+                val logs = parseAuditLogs(preferences[PreferencesKeys.ADMIN_AUDIT_LOGS_JSON])
+                val newLog = AdminAuditLog(action = action, details = details)
+                val updated = listOf(newLog) + logs.take(49) // Keep last 50
+                preferences[PreferencesKeys.ADMIN_AUDIT_LOGS_JSON] = serializeAuditLogs(updated)
+            }
+        } catch (_: Exception) {}
+    }
+
+    suspend fun updateAdminPassword(newPasswordPlain: String) {
+        val newHash = AdminSecurity.hashWithSalt(newPasswordPlain)
+        context.adStatsDataStore.edit { preferences ->
+            preferences[PreferencesKeys.ADMIN_PASSWORD_HASH] = newHash
+        }
+        recordAuditLogInternal("ADMIN_PASSWORD_CHANGED", "Admin password hash updated successfully.")
+    }
+
+    // --- DAILY SPIN PERSISTENCE ---
     suspend fun syncDailySpins(currentDate: String) {
         if (currentDate.isBlank()) return
         context.adStatsDataStore.edit { preferences ->
@@ -346,6 +592,13 @@ class AdStatsRepository(private val context: Context) {
         }
     }
 
+    // --- HELPERS & SERIALIZERS ---
+    private fun generateReferralCode(): String {
+        val alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        val randomSuffix = (1..5).map { alphabet.random() }.joinToString("")
+        return "ADSEARN-$randomSuffix"
+    }
+
     private fun serializeWithdrawalRequests(requests: List<WithdrawalRequest>): String {
         val array = JSONArray()
         for (r in requests) {
@@ -357,6 +610,7 @@ class AdStatsRepository(private val context: Context) {
             obj.put("timestamp", r.timestamp)
             obj.put("status", r.status.name)
             if (r.note != null) obj.put("note", r.note)
+            obj.put("refunded", r.refunded)
             array.put(obj)
         }
         return array.toString()
@@ -381,6 +635,7 @@ class AdStatsRepository(private val context: Context) {
                     WithdrawalStatus.PENDING
                 }
                 val note = if (obj.has("note")) obj.optString("note") else null
+                val refunded = obj.optBoolean("refunded", false)
                 list.add(
                     WithdrawalRequest(
                         id = id,
@@ -389,13 +644,230 @@ class AdStatsRepository(private val context: Context) {
                         email = email,
                         timestamp = timestamp,
                         status = status,
-                        note = note
+                        note = note,
+                        refunded = refunded
                     )
                 )
             }
-        } catch (e: Exception) {
-            // Ignore parse errors
+        } catch (_: Exception) {}
+        return list
+    }
+
+    private fun serializeCoinRedemptions(list: List<CoinRedemptionTransaction>): String {
+        val array = JSONArray()
+        for (t in list) {
+            val obj = JSONObject()
+            obj.put("id", t.id)
+            obj.put("coinsRedeemed", t.coinsRedeemed)
+            obj.put("rupeesCredited", t.rupeesCredited)
+            obj.put("timestamp", t.timestamp)
+            obj.put("status", t.status)
+            array.put(obj)
         }
+        return array.toString()
+    }
+
+    private fun parseCoinRedemptions(jsonStr: String?): List<CoinRedemptionTransaction> {
+        if (jsonStr.isNullOrBlank()) return emptyList()
+        val list = mutableListOf<CoinRedemptionTransaction>()
+        try {
+            val array = JSONArray(jsonStr)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                list.add(
+                    CoinRedemptionTransaction(
+                        id = obj.optString("id", UUID.randomUUID().toString()),
+                        coinsRedeemed = obj.optInt("coinsRedeemed", 0),
+                        rupeesCredited = obj.optDouble("rupeesCredited", 0.0),
+                        timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
+                        status = obj.optString("status", "Completed")
+                    )
+                )
+            }
+        } catch (_: Exception) {}
+        return list
+    }
+
+    private fun serializeReferralState(state: ReferralState): String {
+        val obj = JSONObject()
+        obj.put("myReferralCode", state.myReferralCode)
+        obj.put("totalReferralsCount", state.totalReferralsCount)
+        obj.put("firstReferralClaimed", state.firstReferralClaimed)
+        obj.put("totalReferralRupeesCredited", state.totalReferralRupeesCredited)
+        if (state.appliedReferrerCode != null) obj.put("appliedReferrerCode", state.appliedReferrerCode)
+
+        val historyArray = JSONArray()
+        for (h in state.referralHistory) {
+            val ho = JSONObject()
+            ho.put("id", h.id)
+            ho.put("friendCode", h.friendCode)
+            ho.put("rewardInr", h.rewardInr)
+            ho.put("isFirstReferral", h.isFirstReferral)
+            ho.put("timestamp", h.timestamp)
+            ho.put("status", h.status)
+            historyArray.put(ho)
+        }
+        obj.put("history", historyArray)
+        return obj.toString()
+    }
+
+    private fun parseReferralState(jsonStr: String?, defaultCode: String): ReferralState {
+        if (jsonStr.isNullOrBlank()) {
+            return ReferralState(myReferralCode = defaultCode)
+        }
+        return try {
+            val obj = JSONObject(jsonStr)
+            val history = mutableListOf<ReferralRecord>()
+            val histArr = obj.optJSONArray("history")
+            if (histArr != null) {
+                for (i in 0 until histArr.length()) {
+                    val ho = histArr.getJSONObject(i)
+                    history.add(
+                        ReferralRecord(
+                            id = ho.optString("id", UUID.randomUUID().toString()),
+                            friendCode = ho.optString("friendCode", ""),
+                            rewardInr = ho.optDouble("rewardInr", 0.0),
+                            isFirstReferral = ho.optBoolean("isFirstReferral", false),
+                            timestamp = ho.optLong("timestamp", System.currentTimeMillis()),
+                            status = ho.optString("status", "Credited")
+                        )
+                    )
+                }
+            }
+            ReferralState(
+                myReferralCode = obj.optString("myReferralCode", defaultCode),
+                totalReferralsCount = obj.optInt("totalReferralsCount", 0),
+                firstReferralClaimed = obj.optBoolean("firstReferralClaimed", false),
+                totalReferralRupeesCredited = obj.optDouble("totalReferralRupeesCredited", 0.0),
+                referralHistory = history,
+                appliedReferrerCode = if (obj.has("appliedReferrerCode")) obj.optString("appliedReferrerCode") else null
+            )
+        } catch (_: Exception) {
+            ReferralState(myReferralCode = defaultCode)
+        }
+    }
+
+    private fun serializeReferralSettings(s: ReferralCampaignSettings): String {
+        val obj = JSONObject()
+        obj.put("firstReferralRewardInr", s.firstReferralRewardInr)
+        obj.put("subsequentReferralRewardInr", s.subsequentReferralRewardInr)
+        obj.put("minEligibilityRequirement", s.minEligibilityRequirement)
+        return obj.toString()
+    }
+
+    private fun parseReferralSettings(jsonStr: String?): ReferralCampaignSettings {
+        if (jsonStr.isNullOrBlank()) return ReferralCampaignSettings()
+        return try {
+            val obj = JSONObject(jsonStr)
+            ReferralCampaignSettings(
+                firstReferralRewardInr = obj.optDouble("firstReferralRewardInr", 50.0),
+                subsequentReferralRewardInr = obj.optDouble("subsequentReferralRewardInr", 5.0),
+                minEligibilityRequirement = obj.optString("minEligibilityRequirement", "Friend registers and completes at least 1 ad")
+            )
+        } catch (_: Exception) {
+            ReferralCampaignSettings()
+        }
+    }
+
+    private fun serializeGamesCatalog(list: List<AdminGameItem>): String {
+        val array = JSONArray()
+        for (g in list) {
+            val obj = JSONObject()
+            obj.put("id", g.id)
+            obj.put("title", g.title)
+            obj.put("description", g.description)
+            obj.put("iconEmoji", g.iconEmoji)
+            obj.put("gameType", g.gameType)
+            obj.put("rewardCoins", g.rewardCoins)
+            obj.put("isPublished", g.isPublished)
+            obj.put("launchDestination", g.launchDestination)
+            array.put(obj)
+        }
+        return array.toString()
+    }
+
+    private fun parseGamesCatalog(jsonStr: String?): List<AdminGameItem> {
+        if (jsonStr.isNullOrBlank()) return DefaultGamesCatalog.getDefaultGames()
+        val list = mutableListOf<AdminGameItem>()
+        try {
+            val array = JSONArray(jsonStr)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                list.add(
+                    AdminGameItem(
+                        id = obj.optString("id", UUID.randomUUID().toString()),
+                        title = obj.optString("title", ""),
+                        description = obj.optString("description", ""),
+                        iconEmoji = obj.optString("iconEmoji", "🎮"),
+                        gameType = obj.optString("gameType", "CUSTOM"),
+                        rewardCoins = obj.optInt("rewardCoins", 10),
+                        isPublished = obj.optBoolean("isPublished", true),
+                        launchDestination = obj.optString("launchDestination", "IN_APP")
+                    )
+                )
+            }
+        } catch (_: Exception) {
+            return DefaultGamesCatalog.getDefaultGames()
+        }
+        return if (list.isEmpty()) DefaultGamesCatalog.getDefaultGames() else list
+    }
+
+    private fun serializeAppVersionInfo(v: AppVersionInfo): String {
+        val obj = JSONObject()
+        obj.put("latestVersionCode", v.latestVersionCode)
+        obj.put("latestVersionName", v.latestVersionName)
+        obj.put("releaseNotes", v.releaseNotes)
+        obj.put("downloadUrl", v.downloadUrl)
+        obj.put("isMandatory", v.isMandatory)
+        return obj.toString()
+    }
+
+    private fun parseAppVersionInfo(jsonStr: String?): AppVersionInfo {
+        if (jsonStr.isNullOrBlank()) return AppVersionInfo()
+        return try {
+            val obj = JSONObject(jsonStr)
+            AppVersionInfo(
+                latestVersionCode = obj.optInt("latestVersionCode", 1),
+                latestVersionName = obj.optString("latestVersionName", "1.0"),
+                releaseNotes = obj.optString("releaseNotes", ""),
+                downloadUrl = obj.optString("downloadUrl", "https://github.com/adsearn/releases/latest"),
+                isMandatory = obj.optBoolean("isMandatory", false)
+            )
+        } catch (_: Exception) {
+            AppVersionInfo()
+        }
+    }
+
+    private fun serializeAuditLogs(logs: List<AdminAuditLog>): String {
+        val array = JSONArray()
+        for (l in logs) {
+            val obj = JSONObject()
+            obj.put("id", l.id)
+            obj.put("action", l.action)
+            obj.put("details", l.details)
+            obj.put("timestamp", l.timestamp)
+            array.put(obj)
+        }
+        return array.toString()
+    }
+
+    private fun parseAuditLogs(jsonStr: String?): List<AdminAuditLog> {
+        if (jsonStr.isNullOrBlank()) return emptyList()
+        val list = mutableListOf<AdminAuditLog>()
+        try {
+            val array = JSONArray(jsonStr)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                list.add(
+                    AdminAuditLog(
+                        id = obj.optString("id", UUID.randomUUID().toString()),
+                        action = obj.optString("action", ""),
+                        details = obj.optString("details", ""),
+                        timestamp = obj.optLong("timestamp", System.currentTimeMillis())
+                    )
+                )
+            }
+        } catch (_: Exception) {}
         return list
     }
 }

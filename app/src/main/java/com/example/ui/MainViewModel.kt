@@ -10,8 +10,12 @@ import com.example.ads.UnityAdsManager
 import com.example.ads.UnitySdkStatus
 import com.example.data.AdStats
 import com.example.data.AdStatsRepository
+import com.example.data.AdminGameItem
+import com.example.data.AppVersionInfo
 import com.example.data.NetworkLocationService
 import com.example.data.NetworkLocationState
+import com.example.data.ReferralCampaignSettings
+import com.example.data.WithdrawalStatus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -55,6 +59,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _showWithdrawalSheet = MutableStateFlow(false)
     val showWithdrawalSheet: StateFlow<Boolean> = _showWithdrawalSheet.asStateFlow()
+
+    private val _showRedeemCoinsSheet = MutableStateFlow(false)
+    val showRedeemCoinsSheet: StateFlow<Boolean> = _showRedeemCoinsSheet.asStateFlow()
+
+    private val _isAdminAuthenticated = MutableStateFlow(false)
+    val isAdminAuthenticated: StateFlow<Boolean> = _isAdminAuthenticated.asStateFlow()
+
+    private val _showAdminLoginDialog = MutableStateFlow(false)
+    val showAdminLoginDialog: StateFlow<Boolean> = _showAdminLoginDialog.asStateFlow()
+
+    private val _showAdminDashboard = MutableStateFlow(false)
+    val showAdminDashboard: StateFlow<Boolean> = _showAdminDashboard.asStateFlow()
+
+    private val _dismissedUpdateVersionCode = MutableStateFlow(0)
+    val dismissedUpdateVersionCode: StateFlow<Int> = _dismissedUpdateVersionCode.asStateFlow()
 
     private val _isSpinning = MutableStateFlow(false)
     val isSpinning: StateFlow<Boolean> = _isSpinning.asStateFlow()
@@ -154,7 +173,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         startWheelAnimation(coinsWon)
 
         viewModelScope.launch {
-            // Wheel animation duration is ~3.8 seconds
             delay(3900)
 
             val currentDate = getEffectiveDate()
@@ -171,7 +189,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             _isSpinning.value = false
 
-            // Immediately after the second spin is completed, automatically attempt rewarded ad flow
             if (isSecondSpin && recorded) {
                 launchAutoAdFlow(activity)
             }
@@ -230,6 +247,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // --- WITHDRAWAL ACTIONS ---
     fun openWithdrawalSheet() {
         _showWithdrawalSheet.value = true
     }
@@ -259,6 +277,148 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             )
         }
+    }
+
+    // --- COIN REDEMPTION (20 coins = ₹3) ---
+    fun openRedeemCoinsSheet() {
+        _showRedeemCoinsSheet.value = true
+    }
+
+    fun closeRedeemCoinsSheet() {
+        _showRedeemCoinsSheet.value = false
+    }
+
+    fun redeemCoins(
+        coins: Int,
+        onComplete: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val result = repository.redeemCoins(coins)
+            result.fold(
+                onSuccess = { tx ->
+                    val msg = "Converted ${tx.coinsRedeemed} Coins into ₹${tx.rupeesCredited.toInt()} Cash!"
+                    _snackbarMessages.emit(UiMessage.Success(msg, isReward = true))
+                    _showCoinBurst.value = true
+                    onComplete(true, msg)
+                },
+                onFailure = { err ->
+                    val errorMsg = err.message ?: "Failed to redeem coins."
+                    _snackbarMessages.emit(UiMessage.Error(errorMsg))
+                    onComplete(false, errorMsg)
+                }
+            )
+        }
+    }
+
+    // --- REFERRAL & EARN ACTIONS ---
+    fun applyReferralCode(
+        code: String,
+        onComplete: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val result = repository.applyReferralCode(code)
+            result.fold(
+                onSuccess = { amount ->
+                    val msg = "${amount.toInt()}"
+                    _snackbarMessages.emit(UiMessage.Success("Referral bonus of ₹${amount.toInt()} credited to your wallet!", isReward = true))
+                    _showCoinBurst.value = true
+                    onComplete(true, msg)
+                },
+                onFailure = { err ->
+                    val errString = err.message ?: "Failed to apply referral code."
+                    _snackbarMessages.emit(UiMessage.Error(errString))
+                    onComplete(false, errString)
+                }
+            )
+        }
+    }
+
+    fun updateReferralSettings(settings: ReferralCampaignSettings) {
+        viewModelScope.launch {
+            repository.updateReferralSettings(settings)
+            _snackbarMessages.emit(UiMessage.Success("Referral settings updated."))
+        }
+    }
+
+    // --- GAMES ACTIONS ---
+    fun addOrUpdateGame(game: AdminGameItem) {
+        viewModelScope.launch {
+            repository.addOrUpdateGame(game)
+            _snackbarMessages.emit(UiMessage.Success("Game '${game.title}' saved."))
+        }
+    }
+
+    fun toggleGamePublished(gameId: String, isPublished: Boolean) {
+        viewModelScope.launch {
+            repository.toggleGamePublished(gameId, isPublished)
+        }
+    }
+
+    fun deleteGame(gameId: String) {
+        viewModelScope.launch {
+            repository.deleteGame(gameId)
+            _snackbarMessages.emit(UiMessage.Info("Game removed."))
+        }
+    }
+
+    fun awardGameCoins(coins: Int, gameTitle: String) {
+        viewModelScope.launch {
+            repository.awardGameCoins(coins, gameTitle)
+            _snackbarMessages.emit(UiMessage.Success("+$coins Coins earned from $gameTitle!", isReward = true))
+            _showCoinBurst.value = true
+        }
+    }
+
+    // --- ADMIN AUTH & CONTROL ---
+    fun openAdminLogin() {
+        if (_isAdminAuthenticated.value) {
+            _showAdminDashboard.value = true
+        } else {
+            _showAdminLoginDialog.value = true
+        }
+    }
+
+    fun dismissAdminLogin() {
+        _showAdminLoginDialog.value = false
+    }
+
+    fun onAdminLoginSuccess() {
+        _isAdminAuthenticated.value = true
+        _showAdminLoginDialog.value = false
+        _showAdminDashboard.value = true
+        viewModelScope.launch {
+            _snackbarMessages.emit(UiMessage.Success("Admin access granted."))
+        }
+    }
+
+    fun dismissAdminDashboard() {
+        _showAdminDashboard.value = false
+    }
+
+    fun logoutAdmin() {
+        _isAdminAuthenticated.value = false
+        _showAdminDashboard.value = false
+        viewModelScope.launch {
+            _snackbarMessages.emit(UiMessage.Info("Admin logged out successfully."))
+        }
+    }
+
+    fun updateWithdrawalStatus(requestId: String, status: WithdrawalStatus) {
+        viewModelScope.launch {
+            repository.updateWithdrawalStatus(requestId, status)
+            _snackbarMessages.emit(UiMessage.Success("Withdrawal status updated to ${status.displayName}."))
+        }
+    }
+
+    fun updateAppVersionInfo(info: AppVersionInfo) {
+        viewModelScope.launch {
+            repository.updateAppVersionInfo(info)
+            _snackbarMessages.emit(UiMessage.Success("App version information updated."))
+        }
+    }
+
+    fun dismissUpdateDialog(versionCode: Int) {
+        _dismissedUpdateVersionCode.value = versionCode
     }
 
     fun onCoinBurstFinished() {
