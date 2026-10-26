@@ -43,6 +43,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -82,6 +83,8 @@ import com.example.data.ReferralCampaignSettings
 import com.example.data.WithdrawalRequest
 import com.example.data.WithdrawalStatus
 import com.example.notification.DailyNotificationScheduler
+import com.example.notification.FcmPushManager
+import com.example.notification.GLOBAL_ANNOUNCEMENTS_TOPIC
 import com.example.notification.NotificationSlotConfig
 import com.example.notification.ScheduledNotificationPrefs
 import com.example.ui.theme.AmberWarning
@@ -779,10 +782,352 @@ private fun AdminNotificationsTab(
     var logs by remember { mutableStateOf(prefs.getDeliveryLogs()) }
     var editingSlot by remember { mutableStateOf<NotificationSlotConfig?>(null) }
 
+    var broadcastTitle by remember { mutableStateOf("") }
+    var broadcastMessage by remember { mutableStateOf("") }
+    var isSendingBroadcast by remember { mutableStateOf(false) }
+    var broadcastFeedback by remember { mutableStateOf<String?>(null) }
+    var broadcastSuccess by remember { mutableStateOf(false) }
+    var broadcastHistory by remember { mutableStateOf(FcmPushManager.getBroadcastHistory(context)) }
+    val fcmToken = remember { FcmPushManager.getFcmToken(context) }
+    val registeredDevices = remember { FcmPushManager.getRegisteredDevices(context) }
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // --- 1. GLOBAL PUSH NOTIFICATION COMPOSER (FCM) ---
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = GlassCardFill),
+            shape = RoundedCornerShape(18.dp),
+            border = CardDefaults.outlinedCardBorder().copy(
+                brush = Brush.verticalGradient(listOf(GoldCoin.copy(alpha = 0.5f), GlassCardBorder))
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(GoldCoin.copy(alpha = 0.2f))
+                                .border(1.dp, GoldCoin.copy(alpha = 0.4f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Notifications,
+                                contentDescription = null,
+                                tint = GoldCoin,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "Global Push Notification Broadcast",
+                                color = TextPrimary,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Firebase Cloud Messaging (FCM Topic: $GLOBAL_ANNOUNCEMENTS_TOPIC)",
+                                color = GoldCoinLight,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(EmeraldSuccess.copy(alpha = 0.2f))
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = "${maxOf(1, registeredDevices.size)} Active Devices",
+                            color = EmeraldSuccess,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Text(
+                    text = "Broadcast an announcement to all eligible users worldwide who have installed this app. Sent via FCM to open, backgrounded, or closed devices.",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+
+                // Title Input
+                OutlinedTextField(
+                    value = broadcastTitle,
+                    onValueChange = {
+                        broadcastTitle = it
+                        broadcastFeedback = null
+                    },
+                    label = { Text("Notification Title") },
+                    placeholder = { Text("e.g. 🎁 Special Weekend Bonus Unlocked!") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("fcm_broadcast_title_input"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = PurplePrimary,
+                        unfocusedBorderColor = GlassCardBorder,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                // Message Body Input
+                OutlinedTextField(
+                    value = broadcastMessage,
+                    onValueChange = {
+                        broadcastMessage = it
+                        broadcastFeedback = null
+                    },
+                    label = { Text("Notification Message") },
+                    placeholder = { Text("e.g. Open Adsearn now to claim extra coins and spin the wheel!") },
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth().testTag("fcm_broadcast_message_input"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = PurplePrimary,
+                        unfocusedBorderColor = GlassCardBorder,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                // Live Android Lock Screen / Status Bar Notification Preview
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "LIVE DEVICE NOTIFICATION PREVIEW",
+                        color = TextMuted,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color(0xFF261D47))
+                            .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(14.dp))
+                            .padding(14.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(PurplePrimary),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Notifications,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Adsearn • now",
+                                        color = TextMuted,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        text = "FCM Push",
+                                        color = GoldCoin,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = broadcastTitle.ifBlank { "Notification Title Preview" },
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = broadcastMessage.ifBlank { "Notification message body will appear here on user phones..." },
+                                    color = TextSecondary,
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Feedback Banner
+                if (broadcastFeedback != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (broadcastSuccess) EmeraldSuccess.copy(alpha = 0.15f) else RubyError.copy(alpha = 0.15f))
+                            .border(1.dp, if (broadcastSuccess) EmeraldSuccess.copy(alpha = 0.4f) else RubyError.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                        .padding(12.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.Top) {
+                            Icon(
+                                imageVector = if (broadcastSuccess) Icons.Default.CheckCircle else Icons.Default.Info,
+                                contentDescription = null,
+                                tint = if (broadcastSuccess) EmeraldSuccess else RubyError,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = broadcastFeedback ?: "",
+                                color = TextPrimary,
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+                }
+
+                // Send to All Users Button
+                Button(
+                    onClick = {
+                        if (broadcastTitle.isBlank() || broadcastMessage.isBlank()) {
+                            broadcastFeedback = "Please fill in both Title and Message before sending."
+                            broadcastSuccess = false
+                            return@Button
+                        }
+
+                        isSendingBroadcast = true
+                        broadcastFeedback = null
+                        FcmPushManager.sendGlobalPushAnnouncement(
+                            context = context,
+                            title = broadcastTitle.trim(),
+                            message = broadcastMessage.trim()
+                        ) { success, msg ->
+                            isSendingBroadcast = false
+                            broadcastSuccess = success
+                            broadcastFeedback = msg
+                            if (success) {
+                                broadcastHistory = FcmPushManager.getBroadcastHistory(context)
+                                broadcastTitle = ""
+                                broadcastMessage = ""
+                            }
+                        }
+                    },
+                    enabled = !isSendingBroadcast && broadcastTitle.isNotBlank() && broadcastMessage.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldSuccess),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("send_global_push_button")
+                ) {
+                    if (isSendingBroadcast) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.Black, strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Broadcasting to FCM...", color = Color.Black, fontWeight = FontWeight.Bold)
+                    } else {
+                        Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.Black)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Send to All Users (Global Broadcast)", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // --- BROADCAST HISTORY & DELIVERY REPORTING ---
+        if (broadcastHistory.isNotEmpty()) {
+            Text(
+                text = "Recent Global Broadcasts (${broadcastHistory.size})",
+                color = TextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                broadcastHistory.take(5).forEach { item ->
+                    val dateStr = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date(item.timestamp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0x18FFFFFF))
+                            .border(1.dp, Color(0x22FFFFFF), RoundedCornerShape(12.dp))
+                            .padding(12.dp)
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = item.title,
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(EmeraldSuccess.copy(alpha = 0.2f))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(item.status, color = EmeraldSuccess, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            Text(
+                                text = item.message,
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                                maxLines = 2
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "Target: ${item.targetTopic} • By ${item.sentBy}",
+                                    color = TextMuted,
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Text(
+                                    text = dateStr,
+                                    color = TextMuted,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- 2. 3X DAILY SCHEDULED NOTIFICATIONS (PRESERVED) ---
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = GlassCardFill),

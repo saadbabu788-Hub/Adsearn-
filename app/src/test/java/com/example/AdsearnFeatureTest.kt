@@ -75,4 +75,22 @@ class AdsearnFeatureTest {
         assertEquals(500.0, req.amountInr, 0.001)
         assertEquals("Pending", req.status.displayName)
     }
+
+    @Test
+    fun fcmPushManager_tokenRegistrationAndDuplicateDetection() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val testToken = "test_fcm_token_12345"
+
+        com.example.notification.FcmPushManager.registerDeviceToken(context, testToken)
+        assertEquals(testToken, com.example.notification.FcmPushManager.getFcmToken(context))
+
+        val devices = com.example.notification.FcmPushManager.getRegisteredDevices(context)
+        assertTrue("Registered devices must contain newly registered token", devices.any { it.deviceToken == testToken })
+
+        val broadcastId = "broadcast_test_999"
+        assertFalse("Message ID should not be duplicate initially", com.example.notification.FcmPushManager.isDuplicateMessage(context, broadcastId))
+
+        com.example.notification.FcmPushManager.markMessageReceived(context, broadcastId)
+        assertTrue("Message ID must be flagged as duplicate once marked", com.example.notification.FcmPushManager.isDuplicateMessage(context, broadcastId))
+    }
 }

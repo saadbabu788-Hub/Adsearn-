@@ -14,6 +14,7 @@ class AdsearnApplication : Application() {
         com.example.notification.DailySpinNotificationHelper.createNotificationChannel(this)
         com.example.notification.DailyNotificationScheduler.createNotificationChannel(this)
         com.example.notification.DailyNotificationScheduler.rescheduleAll(this)
+        com.example.notification.FcmPushManager.initFcm(this)
     }
 
     private fun initWebViewDirectories() {
